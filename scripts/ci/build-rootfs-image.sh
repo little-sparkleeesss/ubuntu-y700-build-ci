@@ -149,6 +149,13 @@ printf '%s\n' "$HOSTNAME_NAME" > "$rootfs_dir/etc/hostname"
 touch "$rootfs_dir/etc/hosts"
 sed -i '/^127\.0\.1\.1\b/d' "$rootfs_dir/etc/hosts"
 printf '127.0.1.1 %s\n' "$HOSTNAME_NAME" >> "$rootfs_dir/etc/hosts"
+original_resolv="$work_dir/resolv.conf.original"
+original_resolv_link="$work_dir/resolv.conf.link"
+if [ -L "$rootfs_dir/etc/resolv.conf" ]; then
+  readlink "$rootfs_dir/etc/resolv.conf" > "$original_resolv_link"
+elif [ -e "$rootfs_dir/etc/resolv.conf" ]; then
+  cp -a "$rootfs_dir/etc/resolv.conf" "$original_resolv"
+fi
 rm -f "$rootfs_dir/etc/resolv.conf"
 if [ -n "$RESOLV_CONF_CONTENT" ]; then
   printf '%s\n' "$RESOLV_CONF_CONTENT" > "$rootfs_dir/etc/resolv.conf"
@@ -304,6 +311,15 @@ chroot "$rootfs_dir" env -i \
   HTTPS_PROXY="$APT_HTTPS_PROXY" \
   CLEAN_APT_CACHE="$CLEAN_APT_CACHE" \
   bash /root/ci-provision.sh
+
+rm -f "$rootfs_dir/etc/resolv.conf"
+if [ -f "$original_resolv_link" ]; then
+  ln -s "$(cat "$original_resolv_link")" "$rootfs_dir/etc/resolv.conf"
+elif [ -f "$original_resolv" ]; then
+  cp -a "$original_resolv" "$rootfs_dir/etc/resolv.conf"
+else
+  ln -s ../run/systemd/resolve/stub-resolv.conf "$rootfs_dir/etc/resolv.conf"
+fi
 
 if [ -n "${OVERLAY_ARCHIVE:-}" ]; then
   tmp_overlay="$work_dir/overlay.archive"
