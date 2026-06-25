@@ -1,0 +1,268 @@
+name: Build RootFS And GRUB
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to create/upload. Empty disables release upload.
+        required: false
+        type: string
+      distro:
+        description: Ubuntu/Debian suite
+        required: true
+        default: noble
+        type: string
+      arch:
+        description: Rootfs architecture
+        required: true
+        default: arm64
+        type: string
+      mirror:
+        description: APT mirror
+        required: true
+        default: http://ports.ubuntu.com/ubuntu-ports
+        type: string
+      output_prefix:
+        description: Output artifact prefix
+        required: true
+        default: y700-noble-arm64
+        type: string
+      rootfs_image_size:
+        description: Rootfs image size accepted by truncate, for example 14G
+        required: true
+        default: 14G
+        type: string
+      rootfs_uuid:
+        description: Optional ext4 UUID
+        required: false
+        type: string
+      rootfs_label:
+        description: ext4 filesystem label
+        required: true
+        default: Y700ROOTFS
+        type: string
+      rootfs_partlabel:
+        description: Root partition PARTLABEL used by GRUB
+        required: true
+        default: userdata
+        type: string
+      boot_image_size:
+        description: FAT boot image size, for example 14G or 8388608
+        required: true
+        default: 14G
+        type: string
+      boot_fat_label:
+        description: FAT filesystem label
+        required: true
+        default: Y700GRUB
+        type: string
+      hostname:
+        description: Rootfs hostname
+        required: true
+        default: y700
+        type: string
+      username:
+        description: Default user name
+        required: true
+        default: y700
+        type: string
+      user_password:
+        description: Default user password
+        required: true
+        default: '1234'
+        type: string
+      root_password_mode:
+        description: root password mode
+        required: true
+        default: locked
+        type: choice
+        options:
+          - locked
+          - set
+          - empty
+      root_password:
+        description: Root password when root_password_mode=set
+        required: false
+        type: string
+      user_sudo_mode:
+        description: sudo access for default user
+        required: true
+        default: password
+        type: choice
+        options:
+          - password
+          - nopasswd
+          - none
+      package_list:
+        description: Space/newline separated package list. Empty uses script default.
+        required: false
+        type: string
+      desktop_env:
+        description: Optional desktop package/meta-package
+        required: false
+        default: plasma-desktop
+        type: string
+      overlay_archive_url:
+        description: Optional rootfs overlay archive URL
+        required: false
+        type: string
+      deb_archive_url:
+        description: Optional archive URL containing .deb files to install
+        required: false
+        type: string
+      kernel_artifact_archive_url:
+        description: Archive URL containing Image, DTB, optional kernel.config
+        required: true
+        type: string
+      bootaa64_efi_url:
+        description: BOOTAA64.EFI URL or raw download URL
+        required: true
+        type: string
+      grub_build_archive_url:
+        description: Archive URL containing grub-mkstandalone and grub-core
+        required: true
+        type: string
+      dtb_name:
+        description: DTB file name inside kernel artifact archive
+        required: true
+        default: sm8650-lenovo-tb321fu.dtb
+        type: string
+      root_selector:
+        description: How GRUB points to rootfs
+        required: true
+        default: partlabel
+        type: choice
+        options:
+          - partlabel
+          - uuid
+          - raw
+      rootargs:
+        description: Full rootargs override when root_selector=raw or explicit override
+        required: false
+        type: string
+      rootargs_extra:
+        description: Extra kernel command line appended to generated rootargs
+        required: false
+        default: ''
+        type: string
+      stableargs:
+        description: Stable boot arguments
+        required: false
+        default: drm_client_lib.active=none
+        type: string
+      compress:
+        description: Rootfs compression
+        required: true
+        default: zstd
+        type: choice
+        options:
+          - none
+          - zstd
+          - xz
+          - 7z
+      chunk_size:
+        description: Optional 7z chunk size, for example 1500m
+        required: false
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            debootstrap dosfstools mtools e2fsprogs rsync curl unzip tar xz-utils zstd p7zip-full \
+            gdisk qemu-utils sudo ca-certificates gnupg
+
+      - name: Prepare GRUB build input
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/grub-build"
+          curl -fL --retry 3 -o "$RUNNER_TEMP/grub-build.tar" "${{ inputs.grub_build_archive_url }}"
+          tar -C "$RUNNER_TEMP/grub-build" -xf "$RUNNER_TEMP/grub-build.tar" || tar -C "$RUNNER_TEMP/grub-build" -xzf "$RUNNER_TEMP/grub-build.tar"
+          found=$(find "$RUNNER_TEMP/grub-build" -type f -name grub-mkstandalone -perm -111 | head -n1)
+          test -n "$found"
+          echo "Y700_GRUB_BUILD_DIR=$(dirname "$found")" >> "$GITHUB_ENV"
+
+      - name: Build rootfs image
+        env:
+          OUTPUT_DIR: out/ci-rootfs
+          OUTPUT_PREFIX: ${{ inputs.output_prefix }}
+          DISTRO: ${{ inputs.distro }}
+          ARCH: ${{ inputs.arch }}
+          MIRROR: ${{ inputs.mirror }}
+          ROOTFS_IMAGE_SIZE: ${{ inputs.rootfs_image_size }}
+          ROOTFS_UUID: ${{ inputs.rootfs_uuid }}
+          ROOTFS_LABEL: ${{ inputs.rootfs_label }}
+          ROOTFS_PARTLABEL: ${{ inputs.rootfs_partlabel }}
+          HOSTNAME_NAME: ${{ inputs.hostname }}
+          DEFAULT_USER_NAME: ${{ inputs.username }}
+          DEFAULT_USER_PASSWORD: ${{ inputs.user_password }}
+          ROOT_PASSWORD_MODE: ${{ inputs.root_password_mode }}
+          ROOT_PASSWORD: ${{ inputs.root_password }}
+          USER_SUDO_MODE: ${{ inputs.user_sudo_mode }}
+          PACKAGE_LIST: ${{ inputs.package_list }}
+          DESKTOP_ENV: ${{ inputs.desktop_env }}
+          OVERLAY_ARCHIVE: ${{ inputs.overlay_archive_url }}
+          DEB_ARCHIVE: ${{ inputs.deb_archive_url }}
+          COMPRESS: ${{ inputs.compress }}
+          CHUNK_SIZE: ${{ inputs.chunk_size }}
+        run: |
+          set -euo pipefail
+          sudo --preserve-env=OUTPUT_DIR,OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,DEB_ARCHIVE,COMPRESS,CHUNK_SIZE \
+            bash scripts/ci/build-rootfs-image.sh
+          sudo chown -R "$USER:$USER" out/ci-rootfs
+
+      - name: Build GRUB boot image
+        env:
+          OUTPUT_DIR: out/ci-grub
+          OUTPUT_PREFIX: ${{ inputs.output_prefix }}
+          BOOT_IMAGE_SIZE: ${{ inputs.boot_image_size }}
+          BOOT_FAT_LABEL: ${{ inputs.boot_fat_label }}
+          KERNEL_ARTIFACT_ARCHIVE: ${{ inputs.kernel_artifact_archive_url }}
+          BOOTAA64_EFI_URL: ${{ inputs.bootaa64_efi_url }}
+          DTB_NAME: ${{ inputs.dtb_name }}
+          ROOT_SELECTOR: ${{ inputs.root_selector }}
+          ROOT_PARTLABEL: ${{ inputs.rootfs_partlabel }}
+          ROOT_UUID: ${{ inputs.rootfs_uuid }}
+          ROOTARGS: ${{ inputs.rootargs }}
+          ROOTARGS_EXTRA: ${{ inputs.rootargs_extra }}
+          STABLEARGS: ${{ inputs.stableargs }}
+          Y700_GRUB_BUILD_DIR: ${{ env.Y700_GRUB_BUILD_DIR }}
+        run: |
+          set -euo pipefail
+          bash scripts/ci/build-grub-image.sh
+
+      - name: Write combined checksums
+        run: |
+          set -euo pipefail
+          mkdir -p out/ci-release
+          find out/ci-rootfs out/ci-grub -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > out/ci-release/SHA256SUMS.txt
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.output_prefix }}-rootfs-grub
+          path: |
+            out/ci-rootfs/*
+            out/ci-grub/*
+            out/ci-release/SHA256SUMS.txt
+
+      - name: Upload release assets
+        if: ${{ inputs.release_tag != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --prerelease --title "$RELEASE_TAG"
+          gh release upload "$RELEASE_TAG" out/ci-rootfs/* out/ci-grub/* out/ci-release/SHA256SUMS.txt --clobber
