@@ -49,13 +49,26 @@ ci_extract_archive() {
   local archive=$1
   local dest=$2
   mkdir -p "$dest"
+
   case "$archive" in
-    *.tar.gz|*.tgz) tar -C "$dest" -xzf "$archive" ;;
-    *.tar.xz) tar -C "$dest" -xJf "$archive" ;;
-    *.tar.zst) tar -C "$dest" --zstd -xf "$archive" ;;
-    *.tar) tar -C "$dest" -xf "$archive" ;;
-    *.zip) ci_require_cmd unzip; unzip -q "$archive" -d "$dest" ;;
-    *.7z|*.7z.001) ci_require_cmd 7z; 7z x "$archive" -o"$dest" >/dev/null ;;
-    *) ci_die "unsupported archive format: $archive" ;;
+    *.tar.gz|*.tgz) tar -C "$dest" -xzf "$archive"; return ;;
+    *.tar.xz) tar -C "$dest" -xJf "$archive"; return ;;
+    *.tar.zst) tar -C "$dest" --zstd -xf "$archive"; return ;;
+    *.tar) tar -C "$dest" -xf "$archive"; return ;;
+    *.zip) ci_require_cmd unzip; unzip -q "$archive" -d "$dest"; return ;;
+    *.7z|*.7z.001) ci_require_cmd 7z; 7z x "$archive" -o"$dest" >/dev/null; return ;;
   esac
+
+  # Download URLs often land in extensionless temp files; detect by content.
+  if tar -tf "$archive" >/dev/null 2>&1; then
+    tar -C "$dest" -xf "$archive"
+    return
+  fi
+
+  if command -v 7z >/dev/null 2>&1 && 7z l "$archive" >/dev/null 2>&1; then
+    7z x "$archive" -o"$dest" >/dev/null
+    return
+  fi
+
+  ci_die "unsupported archive format: $archive"
 }
