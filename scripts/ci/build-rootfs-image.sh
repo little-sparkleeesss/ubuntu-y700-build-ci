@@ -149,6 +149,7 @@ printf '%s\n' "$HOSTNAME_NAME" > "$rootfs_dir/etc/hostname"
 touch "$rootfs_dir/etc/hosts"
 sed -i '/^127\.0\.1\.1\b/d' "$rootfs_dir/etc/hosts"
 printf '127.0.1.1 %s\n' "$HOSTNAME_NAME" >> "$rootfs_dir/etc/hosts"
+rm -f "$rootfs_dir/etc/resolv.conf"
 if [ -n "$RESOLV_CONF_CONTENT" ]; then
   printf '%s\n' "$RESOLV_CONF_CONTENT" > "$rootfs_dir/etc/resolv.conf"
 elif [ -f /run/systemd/resolve/resolv.conf ]; then
