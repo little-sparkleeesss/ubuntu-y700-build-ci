@@ -42,6 +42,12 @@ on:
           SENSOR_BASELINE_OVERLAY_ARCHIVE=
           SENSOR_DEB_VERSION=20260626.1
           SENSOR_STRIP=1
+          BUILD_TB321FU_HAPTICS_DEB=1
+          HAPTICS_SOURCE_ARCHIVE=
+          KERNEL_SOURCE_ARCHIVE=
+          KERNEL_BUILD_ARCHIVE=
+          HAPTICS_DEB_VERSION=20260627.1
+          HAPTICS_STRIP=1
           APPLY_Y700_FIRMWARE_FIXES=1
           APPLY_Y700_AUDIO_POLICY_FIXES=1
           CLEAN_APT_CACHE=1
@@ -176,11 +182,47 @@ jobs:
             bash scripts/ci/build-y700-sensor-debs.sh
           echo 'Y700_SENSOR_DEB_DIR=out/y700-sensor-debs' >> "$GITHUB_ENV"
 
+      - name: Build source haptics deb
+        run: |
+          set -euo pipefail
+          if [ "${BUILD_TB321FU_HAPTICS_DEB:-0}" != "1" ]; then
+            echo 'BUILD_TB321FU_HAPTICS_DEB is not 1; skipping.'
+            echo 'TB321FU_HAPTICS_DEB_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ -z "${HAPTICS_SOURCE_ARCHIVE:-}" ] && [ -z "${HAPTICS_SOURCE_DIR:-}" ]; then
+            echo 'No HAPTICS_SOURCE_ARCHIVE/HAPTICS_SOURCE_DIR provided; skipping haptics deb build.'
+            echo 'TB321FU_HAPTICS_DEB_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ -z "${KERNEL_SOURCE_ARCHIVE:-}" ] && [ -z "${KERNEL_SOURCE_DIR:-}" ]; then
+            echo 'No KERNEL_SOURCE_ARCHIVE/KERNEL_SOURCE_DIR provided; skipping haptics deb build.'
+            echo 'TB321FU_HAPTICS_DEB_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ -z "${KERNEL_BUILD_ARCHIVE:-}" ] && [ -z "${KERNEL_BUILD_DIR:-}" ]; then
+            echo 'No KERNEL_BUILD_ARCHIVE/KERNEL_BUILD_DIR provided; skipping haptics deb build.'
+            echo 'TB321FU_HAPTICS_DEB_DIR=' >> "$GITHUB_ENV"
+            exit 0
+          fi
+          env OUTPUT_DIR="out/tb321fu-haptics-debs" \
+            ARCH="${ARCH:-arm64}" \
+            HAPTICS_DEB_VERSION="${HAPTICS_DEB_VERSION:-20260627.1}" \
+            HAPTICS_SOURCE_ARCHIVE="${HAPTICS_SOURCE_ARCHIVE:-}" \
+            HAPTICS_SOURCE_DIR="${HAPTICS_SOURCE_DIR:-}" \
+            KERNEL_SOURCE_ARCHIVE="${KERNEL_SOURCE_ARCHIVE:-}" \
+            KERNEL_SOURCE_DIR="${KERNEL_SOURCE_DIR:-}" \
+            KERNEL_BUILD_ARCHIVE="${KERNEL_BUILD_ARCHIVE:-}" \
+            KERNEL_BUILD_DIR="${KERNEL_BUILD_DIR:-}" \
+            HAPTICS_STRIP="${HAPTICS_STRIP:-1}" \
+            bash scripts/ci/build-tb321fu-haptics-deb.sh
+          echo 'TB321FU_HAPTICS_DEB_DIR=out/tb321fu-haptics-debs' >> "$GITHUB_ENV"
+
       - name: Build rootfs image
         run: |
           set -euo pipefail
-          sudo --preserve-env=OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,DEBOOTSTRAP_VARIANT,RESOLV_CONF_CONTENT,APT_HTTP_PROXY,APT_HTTPS_PROXY,http_proxy,https_proxy,HTTP_PROXY,HTTPS_PROXY,APT_SOURCES_LIST,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,DEB_ARCHIVE,DEB_DIR,SENSOR_DEB_DIR,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,CLEAN_APT_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
-            env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" SENSOR_DEB_DIR="${Y700_SENSOR_DEB_DIR:-}" bash scripts/ci/build-rootfs-image.sh
+          sudo --preserve-env=OUTPUT_PREFIX,DISTRO,ARCH,MIRROR,DEBOOTSTRAP_VARIANT,RESOLV_CONF_CONTENT,APT_HTTP_PROXY,APT_HTTPS_PROXY,http_proxy,https_proxy,HTTP_PROXY,HTTPS_PROXY,APT_SOURCES_LIST,ROOTFS_IMAGE_SIZE,ROOTFS_UUID,ROOTFS_LABEL,ROOTFS_PARTLABEL,HOSTNAME_NAME,DEFAULT_USER_NAME,DEFAULT_USER_PASSWORD,ROOT_PASSWORD_MODE,ROOT_PASSWORD,USER_SUDO_MODE,TZ_REGION,LOCALES,LANG_NAME,PACKAGE_LIST,DESKTOP_ENV,OVERLAY_ARCHIVE,DEB_ARCHIVE,DEB_DIR,SENSOR_DEB_DIR,HAPTICS_DEB_DIR,APPLY_Y700_FIRMWARE_FIXES,APPLY_Y700_AUDIO_POLICY_FIXES,CLEAN_APT_CACHE,COMPRESS,CHUNK_SIZE,KEEP_RAW_IMAGE \
+            env OUTPUT_DIR="$OUTPUT_DIR_ROOTFS" SENSOR_DEB_DIR="${Y700_SENSOR_DEB_DIR:-}" HAPTICS_DEB_DIR="${TB321FU_HAPTICS_DEB_DIR:-}" bash scripts/ci/build-rootfs-image.sh
           sudo chown -R "$USER:$USER" out
 
       - name: Build GRUB boot image
@@ -220,6 +262,9 @@ jobs:
           if [ -d out/y700-sensor-debs ]; then
             checksum_dirs+=(out/y700-sensor-debs)
           fi
+          if [ -d out/tb321fu-haptics-debs ]; then
+            checksum_dirs+=(out/tb321fu-haptics-debs)
+          fi
           find "${checksum_dirs[@]}" -maxdepth 1 -type f -print0 | sort -z | xargs -0 sha256sum > out/ci-release/SHA256SUMS.txt
 
       - name: Upload workflow artifacts
@@ -230,6 +275,7 @@ jobs:
             out/ci-rootfs/*
             out/ci-grub/*
             out/y700-sensor-debs/*
+            out/tb321fu-haptics-debs/*
             out/ci-release/SHA256SUMS.txt
 
       - name: Upload release assets
@@ -243,5 +289,8 @@ jobs:
           release_assets=(out/ci-rootfs/* out/ci-grub/* out/ci-release/SHA256SUMS.txt)
           if compgen -G 'out/y700-sensor-debs/*' >/dev/null; then
             release_assets+=(out/y700-sensor-debs/*)
+          fi
+          if compgen -G 'out/tb321fu-haptics-debs/*' >/dev/null; then
+            release_assets+=(out/tb321fu-haptics-debs/*)
           fi
           gh release upload "$RELEASE_TAG" "${release_assets[@]}" --clobber

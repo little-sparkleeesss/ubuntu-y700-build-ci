@@ -43,6 +43,7 @@ Environment inputs:
   DEB_ARCHIVE                optional local path or URL containing .deb files
   DEB_DIR                    optional directory containing .deb files
   SENSOR_DEB_DIR             optional directory containing source-built sensor .deb files
+  HAPTICS_DEB_DIR            optional directory containing source-built haptics .deb files
   APPLY_Y700_FIRMWARE_FIXES  copy/verify required Y700 firmware paths only, default: 1
   APPLY_Y700_AUDIO_POLICY_FIXES
                               install Y700 WirePlumber ALSA policy for headset mic, default: 1
@@ -303,6 +304,15 @@ apt-get update
 apt-get install -y $PACKAGE_LIST
 
 install -d -m 0755 /etc/skel/.config
+cat > /etc/skel/.config/plasmakeyboardrc <<'PLASMAKEYBOARDRC'
+[General]
+enabledLocales=en_US
+soundEnabled=true
+vibrationEnabled=true
+vibrationMs=20
+PLASMAKEYBOARDRC
+chmod 0644 /etc/skel/.config/plasmakeyboardrc
+
 cat > /etc/skel/.config/kwinoutputconfig.json <<'KWINOUTPUTCONFIG'
 [
     {
@@ -454,6 +464,11 @@ if [ -n "${SENSOR_DEB_DIR:-}" ]; then
   ci_log "including source-built sensor debs from: $SENSOR_DEB_DIR"
   find "$SENSOR_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
 fi
+if [ -n "${HAPTICS_DEB_DIR:-}" ]; then
+  mkdir -p "$rootfs_dir/var/tmp/ci-debs"
+  ci_log "including source-built haptics debs from: $HAPTICS_DEB_DIR"
+  find "$HAPTICS_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
+fi
 
 ci_log "provisioning rootfs"
 chroot "$rootfs_dir" env -i \
@@ -523,6 +538,7 @@ overlay_dir=${OVERLAY_DIR:-}
 deb_archive=${DEB_ARCHIVE:-}
 deb_dir=${DEB_DIR:-}
 sensor_deb_dir=${SENSOR_DEB_DIR:-}
+haptics_deb_dir=${HAPTICS_DEB_DIR:-}
 apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
 apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
 INFO
