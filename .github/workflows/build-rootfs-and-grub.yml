@@ -29,29 +29,20 @@ on:
           - minbase
           - buildd
       rootfs_image_size:
-        description: rootfs ext4 镜像大小；默认 20G，过小可能导致桌面环境安装失败。
+        description: rootfs ext4 镜像大小；可手填如 20G、24G、32768M，过小可能导致桌面环境安装失败。
         required: true
         default: 20G
-        type: choice
-        options:
-          - 20G
-          - 24G
-          - 32G
-          - 40G
+        type: string
       rootfs_label:
         description: rootfs 文件系统卷标；只是 ext4 label，不决定刷入分区。
         required: true
         default: Ubuntu
         type: string
       rootfs_partlabel:
-        description: rootfs GPT 分区标签；当前 Y700 启动和刷机默认应保持 userdata。
+        description: rootfs GPT 分区标签；当前 Y700 启动和刷机默认应保持 userdata，但可手填其它标签。
         required: true
         default: userdata
-        type: choice
-        options:
-          - userdata
-          - rootfs
-          - ubuntu
+        type: string
       hostname_name:
         description: 系统主机名；安装后会写入 /etc/hostname。
         required: true
@@ -96,14 +87,10 @@ on:
         default: false
         type: boolean
       boot_image_size:
-        description: GRUB/FAT 启动镜像大小；使用现有 verified boot template 时默认 256M 足够。
+        description: GRUB/FAT 启动镜像大小；可手填如 256M、512M、1G，使用现有 verified boot template 时默认 256M 足够。
         required: true
         default: 256M
-        type: choice
-        options:
-          - 256M
-          - 512M
-          - 1G
+        type: string
       rootfs_config:
         description: 高级 rootfs 配置，按 KEY=value 每行填写；常用选项已单独列出，并会覆盖这里的同名 KEY。
         required: true
