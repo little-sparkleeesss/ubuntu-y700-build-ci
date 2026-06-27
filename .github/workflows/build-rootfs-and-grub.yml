@@ -493,6 +493,23 @@ jobs:
 
           select_release_asset "$OUTPUT_DIR_ROOTFS" "${OUTPUT_PREFIX}-rootfs.img" rootfs "${COMPRESS:-7z}" "${CHUNK_SIZE:-}"
           select_release_asset "$OUTPUT_DIR_GRUB" "${OUTPUT_PREFIX}-grub-fat.img" grub "${BOOT_COMPRESS:-7z}" "${BOOT_CHUNK_SIZE:-}"
+
+          split_large_release_assets() {
+            local max_bytes=1992294400
+            local asset size
+
+            while IFS= read -r -d '' asset; do
+              size=$(stat -c '%s' "$asset")
+              if [ "$size" -le "$max_bytes" ]; then
+                continue
+              fi
+              echo "Splitting release asset larger than GitHub's 2GB limit: $asset ($size bytes)"
+              split -b 1900M -d -a 3 "$asset" "$asset.part-"
+              rm -f "$asset"
+            done < <(find "$release_dir" -maxdepth 1 -type f -print0)
+          }
+
+          split_large_release_assets
           (cd "$release_dir" && sha256sum * > SHA256SUMS.txt)
 
           notes=out/ci-release/BUILD-PARAMETERS.md
@@ -511,6 +528,7 @@ jobs:
             echo "- Generated: \`$(date -u -Iseconds)\`"
             echo
             echo 'Password-like values are redacted in these release notes.'
+            echo 'Assets ending in `.part-NNN` are split only to satisfy the GitHub Release 2GB per-asset limit. Recombine them in lexical order before extraction, for example: `cat TB321FU-kubuntu2604-arm64-rootfs.img.7z.part-* > TB321FU-kubuntu2604-arm64-rootfs.img.7z`.'
             echo
             echo '## rootfs_config'
             echo '```text'
