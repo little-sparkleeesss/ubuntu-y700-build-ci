@@ -44,6 +44,9 @@ Environment inputs:
   DEB_DIR                    optional directory containing .deb files
   SENSOR_DEB_DIR             optional directory containing source-built sensor .deb files
   HAPTICS_DEB_DIR            optional directory containing source-built haptics .deb files
+  BUILD_TB321FU_GPU_SENSOR   build/install TB321FU KSystemStats Adreno frequency plugin, default: 1
+  TB321FU_GPU_SENSOR_SOURCE_DIR
+                              optional source directory for the plugin; defaults to repo source/
   APPLY_Y700_FIRMWARE_FIXES  copy/verify required Y700 firmware paths only, default: 1
   APPLY_Y700_AUDIO_POLICY_FIXES
                               install Y700 WirePlumber ALSA policy for headset mic, default: 1
@@ -92,6 +95,8 @@ LOCALES=${LOCALES:-$'en_US.UTF-8 UTF-8\nzh_CN.UTF-8 UTF-8'}
 CLEAN_APT_CACHE=${CLEAN_APT_CACHE:-1}
 APPLY_Y700_FIRMWARE_FIXES=${APPLY_Y700_FIRMWARE_FIXES:-1}
 APPLY_Y700_AUDIO_POLICY_FIXES=${APPLY_Y700_AUDIO_POLICY_FIXES:-1}
+BUILD_TB321FU_GPU_SENSOR=${BUILD_TB321FU_GPU_SENSOR:-1}
+TB321FU_GPU_SENSOR_SOURCE_DIR=${TB321FU_GPU_SENSOR_SOURCE_DIR:-}
 COMPRESS=${COMPRESS:-7z}
 CHUNK_SIZE=${CHUNK_SIZE:-1500m}
 KEEP_RAW_IMAGE=${KEEP_RAW_IMAGE:-0}
@@ -203,6 +208,137 @@ CONF
   grep -q 'api.acp.auto-profile = true' "$conf" || ci_die "Y700 ALSA policy missing auto-profile=true"
   grep -q 'api.acp.auto-port = true' "$conf" || ci_die "Y700 ALSA policy missing auto-port=true"
   grep -q 'api.alsa.split-enable = false' "$conf" || ci_die "Y700 ALSA policy missing split-enable=false"
+}
+
+apply_tb321fu_gpu_sensor() {
+  local root=$1
+  local source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-"$SCRIPT_DIR/../../source/tb321fu-ksystemstats-adreno-freq"}
+  local rootfs_src=/tmp/tb321fu-ksystemstats-adreno-freq-src
+  local rootfs_build=/tmp/tb321fu-ksystemstats-adreno-freq-build
+  local plugin_rel=usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_tb321fu_gpu.so
+  local stock_plugin_rel=usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_gpu.so
+  local disabled_stock_plugin_rel=$stock_plugin_rel.disabled-tb321fu-adreno
+
+  ci_log "building TB321FU KSystemStats Adreno GPU frequency plugin"
+
+  [ -f "$source_dir/CMakeLists.txt" ] || ci_die "missing TB321FU GPU sensor source: $source_dir/CMakeLists.txt"
+  [ -f "$source_dir/tb321fu_gpu.cpp" ] || ci_die "missing TB321FU GPU sensor source: $source_dir/tb321fu_gpu.cpp"
+  [ -f "$source_dir/metadata.json" ] || ci_die "missing TB321FU GPU sensor source: $source_dir/metadata.json"
+
+  rm -rf "$root$rootfs_src" "$root$rootfs_build"
+  install -d -m 0755 "$root$rootfs_src"
+  rsync -a --delete "$source_dir"/ "$root$rootfs_src"/
+
+  cat > "$root/root/ci-build-tb321fu-gpu-sensor.sh" <<'GPU_SENSOR_BUILD'
+#!/usr/bin/env bash
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+
+if [ -n "${APT_HTTP_PROXY:-}" ] || [ -n "${APT_HTTPS_PROXY:-}" ]; then
+  mkdir -p /etc/apt/apt.conf.d
+  : > /etc/apt/apt.conf.d/99ci-proxy
+  if [ -n "${APT_HTTP_PROXY:-}" ]; then
+    printf 'Acquire::http::Proxy "%s";\n' "$APT_HTTP_PROXY" >> /etc/apt/apt.conf.d/99ci-proxy
+  fi
+  if [ -n "${APT_HTTPS_PROXY:-}" ]; then
+    printf 'Acquire::https::Proxy "%s";\n' "$APT_HTTPS_PROXY" >> /etc/apt/apt.conf.d/99ci-proxy
+  fi
+fi
+
+src=/tmp/tb321fu-ksystemstats-adreno-freq-src
+build=/tmp/tb321fu-ksystemstats-adreno-freq-build
+plugin=/usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_tb321fu_gpu.so
+stock=/usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_gpu.so
+disabled=/usr/lib/aarch64-linux-gnu/qt6/plugins/ksystemstats/ksystemstats_plugin_gpu.so.disabled-tb321fu-adreno
+build_deps="cmake extra-cmake-modules g++ make libksysguard-dev libkf6coreaddons-dev libsensors-dev"
+
+new_build_deps=""
+for pkg in $build_deps; do
+  if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
+    :
+  else
+    new_build_deps="$new_build_deps $pkg"
+  fi
+done
+
+apt-get update
+apt-get install -y --no-install-recommends $build_deps
+
+cmake -S "$src" -B "$build" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr
+cmake --build "$build" -j"${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}"
+cmake --install "$build"
+
+test -f "$plugin"
+if [ -f "$stock" ]; then
+  rm -f "$disabled"
+  mv "$stock" "$disabled"
+fi
+test ! -e "$stock"
+
+install -d -m 0755 /usr/share/tb321fu-ksystemstats-gpu
+sha256sum "$plugin" > /usr/share/tb321fu-ksystemstats-gpu/ksystemstats_plugin_tb321fu_gpu.so.sha256
+
+rm -rf "$src" "$build"
+
+if [ -n "$new_build_deps" ]; then
+  apt-get purge -y $new_build_deps
+  apt-get autoremove -y --purge
+fi
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+rm -f /etc/apt/apt.conf.d/99ci-proxy
+
+test -f "$plugin"
+test ! -e "$stock"
+test ! -e "$src"
+test ! -e "$build"
+GPU_SENSOR_BUILD
+  chmod +x "$root/root/ci-build-tb321fu-gpu-sensor.sh"
+
+  local gpu_resolv_backup="$work_dir/gpu-sensor-resolv.conf.original"
+  local gpu_resolv_link="$work_dir/gpu-sensor-resolv.conf.link"
+  rm -f "$gpu_resolv_backup" "$gpu_resolv_link"
+  if [ -L "$root/etc/resolv.conf" ]; then
+    readlink "$root/etc/resolv.conf" > "$gpu_resolv_link"
+  elif [ -e "$root/etc/resolv.conf" ]; then
+    cp -a "$root/etc/resolv.conf" "$gpu_resolv_backup"
+  fi
+  rm -f "$root/etc/resolv.conf"
+  if [ -n "$RESOLV_CONF_CONTENT" ]; then
+    printf '%s\n' "$RESOLV_CONF_CONTENT" > "$root/etc/resolv.conf"
+  elif [ -f /run/systemd/resolve/resolv.conf ]; then
+    cp /run/systemd/resolve/resolv.conf "$root/etc/resolv.conf"
+  else
+    cp /etc/resolv.conf "$root/etc/resolv.conf"
+  fi
+
+  chroot "$root" env -i \
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+    HOME=/root \
+    LANG=C.UTF-8 \
+    APT_HTTP_PROXY="$APT_HTTP_PROXY" \
+    APT_HTTPS_PROXY="$APT_HTTPS_PROXY" \
+    http_proxy="$APT_HTTP_PROXY" \
+    https_proxy="$APT_HTTPS_PROXY" \
+    HTTP_PROXY="$APT_HTTP_PROXY" \
+    HTTPS_PROXY="$APT_HTTPS_PROXY" \
+    TB321FU_GPU_SENSOR_BUILD_JOBS="${TB321FU_GPU_SENSOR_BUILD_JOBS:-2}" \
+    bash /root/ci-build-tb321fu-gpu-sensor.sh
+
+  rm -f "$root/etc/resolv.conf"
+  if [ -f "$gpu_resolv_link" ]; then
+    ln -s "$(cat "$gpu_resolv_link")" "$root/etc/resolv.conf"
+  elif [ -f "$gpu_resolv_backup" ]; then
+    cp -a "$gpu_resolv_backup" "$root/etc/resolv.conf"
+  else
+    ln -s ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"
+  fi
+
+  rm -f "$root/root/ci-build-tb321fu-gpu-sensor.sh"
+  [ -f "$root/$plugin_rel" ] || ci_die "TB321FU GPU sensor plugin missing after build: /$plugin_rel"
+  [ ! -e "$root/$stock_plugin_rel" ] || ci_die "stock KSystemStats GPU plugin still enabled: /$stock_plugin_rel"
+  [ -f "$root/$disabled_stock_plugin_rel" ] || ci_die "disabled stock KSystemStats GPU plugin missing: /$disabled_stock_plugin_rel"
 }
 
 cleanup() {
@@ -519,6 +655,9 @@ fi
 if ci_bool "$APPLY_Y700_AUDIO_POLICY_FIXES"; then
   apply_y700_audio_policy_fixes "$rootfs_dir"
 fi
+if ci_bool "$BUILD_TB321FU_GPU_SENSOR"; then
+  apply_tb321fu_gpu_sensor "$rootfs_dir"
+fi
 
 cat > "$rootfs_dir/BUILD-INFO.txt" <<INFO
 generated=$(date -u -Iseconds)
@@ -539,6 +678,8 @@ deb_archive=${DEB_ARCHIVE:-}
 deb_dir=${DEB_DIR:-}
 sensor_deb_dir=${SENSOR_DEB_DIR:-}
 haptics_deb_dir=${HAPTICS_DEB_DIR:-}
+build_tb321fu_gpu_sensor=$BUILD_TB321FU_GPU_SENSOR
+tb321fu_gpu_sensor_source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-repo-default}
 apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
 apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
 INFO
