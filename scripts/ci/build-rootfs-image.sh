@@ -25,7 +25,7 @@ Environment inputs:
   APT_SOURCES_LIST           optional full sources.list replacement
   ROOTFS_IMAGE_SIZE          default: 14G
   ROOTFS_UUID                optional ext4 UUID
-  ROOTFS_LABEL               default: Y700ROOTFS
+  ROOTFS_LABEL               default: Ubuntu
   ROOTFS_PARTLABEL           metadata only, default: userdata
   HOSTNAME_NAME              default: y700
   DEFAULT_USER_NAME          default: y700
@@ -33,6 +33,8 @@ Environment inputs:
   ROOT_PASSWORD_MODE         locked|set|empty, default: locked
   ROOT_PASSWORD              used when ROOT_PASSWORD_MODE=set
   USER_SUDO_MODE             password|nopasswd|none, default: password
+  SDDM_AUTOLOGIN             enable SDDM autologin for DEFAULT_USER_NAME, default: 0
+  SDDM_AUTOLOGIN_SESSION     SDDM session desktop name, default: plasma
   TZ_REGION                  default: Asia/Shanghai
   LOCALES                    default: en_US.UTF-8 UTF-8\nzh_CN.UTF-8 UTF-8
   LANG_NAME                  default: zh_CN.UTF-8
@@ -42,7 +44,9 @@ Environment inputs:
   OVERLAY_DIR                optional directory copied into rootfs
   DEB_ARCHIVE                optional local path or URL containing .deb files
   DEB_DIR                    optional directory containing .deb files
+  SENSOR_DEB_ARCHIVE         optional local path or URL containing sensor .deb files
   SENSOR_DEB_DIR             optional directory containing source-built sensor .deb files
+  HAPTICS_DEB_ARCHIVE        optional local path or URL containing haptics .deb files
   HAPTICS_DEB_DIR            optional directory containing source-built haptics .deb files
   CAMERA_STACK_DEB_DIR       optional directory containing source-built camera stack .deb files
   BUILD_TB321FU_GPU_SENSOR   build/install TB321FU KSystemStats Adreno frequency plugin, default: 1
@@ -50,12 +54,13 @@ Environment inputs:
                               optional source directory for the plugin; defaults to repo source/
   INSTALL_GNOME_SNAPSHOT     install GNOME Snapshot camera app, default: 1
   INSTALL_FIREFOX            install Firefox browser, default: 1
+  DISABLE_SNAPD              purge snapd and snap integration from rootfs, default: 1
   APPLY_Y700_FIRMWARE_FIXES  copy/verify required Y700 firmware paths only, default: 1
   APPLY_Y700_AUDIO_POLICY_FIXES
                               install Y700 WirePlumber ALSA policy for headset mic, default: 1
   CLEAN_APT_CACHE            default: 1
   COMPRESS                   none|zstd|xz|7z, default: 7z
-  CHUNK_SIZE                 optional 7z volume size, example: 1500m
+  CHUNK_SIZE                 optional 7z volume size; empty disables volumes
   KEEP_RAW_IMAGE             keep uncompressed rootfs image after packaging, default: 0
 USAGE
 }
@@ -84,7 +89,7 @@ APT_HTTPS_PROXY=${APT_HTTPS_PROXY:-${https_proxy:-${HTTPS_PROXY:-${APT_HTTP_PROX
 OUTPUT_PREFIX=${OUTPUT_PREFIX:-${DISTRO}-${ARCH}}
 OUTPUT_DIR=${OUTPUT_DIR:-out/ci-rootfs}
 ROOTFS_IMAGE_SIZE=${ROOTFS_IMAGE_SIZE:-14G}
-ROOTFS_LABEL=${ROOTFS_LABEL:-Y700ROOTFS}
+ROOTFS_LABEL=${ROOTFS_LABEL:-Ubuntu}
 ROOTFS_PARTLABEL=${ROOTFS_PARTLABEL:-userdata}
 HOSTNAME_NAME=${HOSTNAME_NAME:-y700}
 DEFAULT_USER_NAME=${DEFAULT_USER_NAME:-y700}
@@ -92,6 +97,8 @@ DEFAULT_USER_PASSWORD=${DEFAULT_USER_PASSWORD:-1234}
 ROOT_PASSWORD_MODE=${ROOT_PASSWORD_MODE:-locked}
 ROOT_PASSWORD=${ROOT_PASSWORD:-}
 USER_SUDO_MODE=${USER_SUDO_MODE:-password}
+SDDM_AUTOLOGIN=${SDDM_AUTOLOGIN:-0}
+SDDM_AUTOLOGIN_SESSION=${SDDM_AUTOLOGIN_SESSION:-plasma}
 TZ_REGION=${TZ_REGION:-Asia/Shanghai}
 LANG_NAME=${LANG_NAME:-zh_CN.UTF-8}
 LOCALES=${LOCALES:-$'en_US.UTF-8 UTF-8\nzh_CN.UTF-8 UTF-8'}
@@ -102,8 +109,9 @@ BUILD_TB321FU_GPU_SENSOR=${BUILD_TB321FU_GPU_SENSOR:-1}
 TB321FU_GPU_SENSOR_SOURCE_DIR=${TB321FU_GPU_SENSOR_SOURCE_DIR:-}
 INSTALL_GNOME_SNAPSHOT=${INSTALL_GNOME_SNAPSHOT:-1}
 INSTALL_FIREFOX=${INSTALL_FIREFOX:-1}
+DISABLE_SNAPD=${DISABLE_SNAPD:-1}
 COMPRESS=${COMPRESS:-7z}
-CHUNK_SIZE=${CHUNK_SIZE:-1500m}
+CHUNK_SIZE=${CHUNK_SIZE:-}
 KEEP_RAW_IMAGE=${KEEP_RAW_IMAGE:-0}
 
 default_packages="systemd systemd-sysv dbus sudo locales tzdata ca-certificates gnupg curl wget network-manager openssh-server nano vim rsync kmod initramfs-tools"
@@ -117,6 +125,60 @@ fi
 if ci_bool "$INSTALL_FIREFOX"; then
   PACKAGE_LIST="$PACKAGE_LIST firefox"
 fi
+
+configure_mozilla_firefox_repo() {
+  local root=$1
+  local keyring_dir="$root/etc/apt/keyrings"
+  local source_dir="$root/etc/apt/sources.list.d"
+  local pref_dir="$root/etc/apt/preferences.d"
+  local keyring="$keyring_dir/packages.mozilla.org.asc"
+  local key_tmp="$work_dir/packages.mozilla.org.asc"
+
+  ci_log "configuring Mozilla APT repository for non-snap Firefox"
+  install -d -m 0755 "$keyring_dir" "$source_dir" "$pref_dir"
+  ci_download "https://packages.mozilla.org/apt/repo-signing-key.gpg" "$key_tmp"
+  install -m 0644 "$key_tmp" "$keyring"
+
+  cat > "$source_dir/mozilla.list" <<'MOZILLA_APT'
+deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main
+MOZILLA_APT
+  chmod 0644 "$source_dir/mozilla.list"
+
+  cat > "$pref_dir/mozilla-firefox" <<'MOZILLA_PREF'
+Package: firefox firefox-*
+Pin: origin packages.mozilla.org
+Pin-Priority: 1001
+
+Package: firefox
+Pin: version 1:*snap*
+Pin-Priority: -1
+MOZILLA_PREF
+  chmod 0644 "$pref_dir/mozilla-firefox"
+}
+
+include_deb_archive() {
+  local label=$1 src=$2
+  local archive extract copied deb
+
+  [ -n "$src" ] || return 0
+
+  archive="$work_dir/${label}.archive"
+  extract="$work_dir/${label}-debs"
+  rm -rf "$extract"
+  mkdir -p "$rootfs_dir/var/tmp/ci-debs" "$extract"
+
+  ci_log "including $label deb archive: $src"
+  ci_download "$src" "$archive"
+  ci_extract_archive "$archive" "$extract"
+
+  copied=0
+  while IFS= read -r -d '' deb; do
+    cp -a "$deb" "$rootfs_dir/var/tmp/ci-debs/"
+    copied=$((copied + 1))
+  done < <(find "$extract" -type f -name '*.deb' -print0)
+
+  [ "$copied" -gt 0 ] || ci_die "$label deb archive did not contain any .deb files: $src"
+}
 
 mkdir -p "$OUTPUT_DIR"
 work_dir=$(mktemp -d "$OUTPUT_DIR/.rootfs-build.XXXXXX")
@@ -221,6 +283,33 @@ CONF
   grep -q 'api.alsa.split-enable = false' "$conf" || ci_die "Y700 ALSA policy missing split-enable=false"
 }
 
+apply_sddm_autologin() {
+  local root=$1
+  local conf_dir="$root/etc/sddm.conf.d"
+  local conf="$conf_dir/30-autologin.conf"
+
+  rm -f "$conf"
+
+  if ! ci_bool "$SDDM_AUTOLOGIN"; then
+    ci_log "SDDM autologin disabled"
+    return 0
+  fi
+
+  ci_log "enabling SDDM autologin for $DEFAULT_USER_NAME"
+  install -d -m 0755 "$conf_dir"
+  cat > "$conf" <<CONF
+[Autologin]
+User=$DEFAULT_USER_NAME
+Session=$SDDM_AUTOLOGIN_SESSION
+Relogin=false
+CONF
+  chmod 0644 "$conf"
+  chown 0:0 "$conf" 2>/dev/null || true
+
+  grep -q "^User=$DEFAULT_USER_NAME$" "$conf" || ci_die "SDDM autologin user was not written"
+  grep -q "^Session=$SDDM_AUTOLOGIN_SESSION$" "$conf" || ci_die "SDDM autologin session was not written"
+}
+
 apply_tb321fu_gpu_sensor() {
   local root=$1
   local source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-"$SCRIPT_DIR/../../source/tb321fu-ksystemstats-adreno-freq"}
@@ -245,6 +334,14 @@ apply_tb321fu_gpu_sensor() {
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
+
+ci_bool_chroot()
+{
+  case "${1:-}" in
+    1|yes|true|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 if [ -n "${APT_HTTP_PROXY:-}" ] || [ -n "${APT_HTTPS_PROXY:-}" ]; then
   mkdir -p /etc/apt/apt.conf.d
@@ -436,6 +533,14 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+ci_bool_chroot()
+{
+  case "${1:-}" in
+    1|yes|true|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 if [ -n "${APT_HTTP_PROXY:-}" ] || [ -n "${APT_HTTPS_PROXY:-}" ]; then
   mkdir -p /etc/apt/apt.conf.d
   : > /etc/apt/apt.conf.d/99ci-proxy
@@ -449,6 +554,14 @@ fi
 
 apt-get update
 apt-get install -y $PACKAGE_LIST
+
+if ci_bool_chroot "$INSTALL_FIREFOX"; then
+  firefox_version=$(dpkg-query -W -f='${Version}' firefox 2>/dev/null || true)
+  [ -n "$firefox_version" ] || { echo 'firefox package was not installed' >&2; exit 1; }
+  case "$firefox_version" in
+    *snap*) echo "refusing snap transition Firefox package version: $firefox_version" >&2; exit 1 ;;
+  esac
+fi
 
 install -d -m 0755 /etc/skel/.config
 cat > /etc/skel/.config/plasmakeyboardrc <<'PLASMAKEYBOARDRC'
@@ -583,6 +696,16 @@ for ci_overlay in /var/tmp/ci-debs/*.tar /var/tmp/ci-debs/*.tar.gz /var/tmp/ci-d
   esac
 done
 
+if ci_bool_chroot "$DISABLE_SNAPD"; then
+  apt-get purge -y snapd plasma-discover-backend-snap || true
+  apt-get autoremove -y --purge || true
+  rm -rf /snap /var/snap /var/lib/snapd /var/cache/snapd
+  if dpkg-query -W -f='${Status}' snapd 2>/dev/null | grep -q 'install ok installed'; then
+    echo 'snapd is still installed despite DISABLE_SNAPD=1' >&2
+    exit 1
+  fi
+fi
+
 if [ "$CLEAN_APT_CACHE" = 1 ]; then
   apt-get clean
   rm -rf /var/lib/apt/lists/*
@@ -606,10 +729,16 @@ if [ -n "${DEB_DIR:-}" ]; then
   mkdir -p "$rootfs_dir/var/tmp/ci-debs"
   find "$DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
 fi
+if [ -n "${SENSOR_DEB_ARCHIVE:-}" ]; then
+  include_deb_archive sensor "$SENSOR_DEB_ARCHIVE"
+fi
 if [ -n "${SENSOR_DEB_DIR:-}" ]; then
   mkdir -p "$rootfs_dir/var/tmp/ci-debs"
   ci_log "including source-built sensor debs from: $SENSOR_DEB_DIR"
   find "$SENSOR_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
+fi
+if [ -n "${HAPTICS_DEB_ARCHIVE:-}" ]; then
+  include_deb_archive haptics "$HAPTICS_DEB_ARCHIVE"
 fi
 if [ -n "${HAPTICS_DEB_DIR:-}" ]; then
   mkdir -p "$rootfs_dir/var/tmp/ci-debs"
@@ -620,6 +749,10 @@ if [ -n "${CAMERA_STACK_DEB_DIR:-}" ]; then
   mkdir -p "$rootfs_dir/var/tmp/ci-debs"
   ci_log "including source-built camera stack debs from: $CAMERA_STACK_DEB_DIR"
   find "$CAMERA_STACK_DEB_DIR" -maxdepth 1 -type f -name '*.deb' -exec cp -a {} "$rootfs_dir/var/tmp/ci-debs/" \;
+fi
+
+if ci_bool "$INSTALL_FIREFOX"; then
+  configure_mozilla_firefox_repo "$rootfs_dir"
 fi
 
 ci_log "provisioning rootfs"
@@ -633,6 +766,8 @@ chroot "$rootfs_dir" env -i \
   ROOT_PASSWORD_MODE="$ROOT_PASSWORD_MODE" \
   ROOT_PASSWORD="$ROOT_PASSWORD" \
   USER_SUDO_MODE="$USER_SUDO_MODE" \
+  INSTALL_FIREFOX="$INSTALL_FIREFOX" \
+  DISABLE_SNAPD="$DISABLE_SNAPD" \
   TZ_REGION="$TZ_REGION" \
   LOCALES="$LOCALES" \
   LANG_NAME="$LANG_NAME" \
@@ -665,6 +800,8 @@ if [ -n "${OVERLAY_DIR:-}" ]; then
   rsync -aH --numeric-ids "$OVERLAY_DIR"/ "$rootfs_dir"/
 fi
 
+apply_sddm_autologin "$rootfs_dir"
+
 if ci_bool "$APPLY_Y700_FIRMWARE_FIXES"; then
   apply_y700_firmware_fixes "$rootfs_dir"
 fi
@@ -685,6 +822,8 @@ hostname=$HOSTNAME_NAME
 default_user=$DEFAULT_USER_NAME
 root_password_mode=$ROOT_PASSWORD_MODE
 user_sudo_mode=$USER_SUDO_MODE
+sddm_autologin=$SDDM_AUTOLOGIN
+sddm_autologin_session=$SDDM_AUTOLOGIN_SESSION
 rootfs_label=$ROOTFS_LABEL
 rootfs_uuid=${ROOTFS_UUID:-}
 rootfs_partlabel=$ROOTFS_PARTLABEL
@@ -692,13 +831,16 @@ overlay_archive=${OVERLAY_ARCHIVE:-}
 overlay_dir=${OVERLAY_DIR:-}
 deb_archive=${DEB_ARCHIVE:-}
 deb_dir=${DEB_DIR:-}
+sensor_deb_archive=${SENSOR_DEB_ARCHIVE:-}
 sensor_deb_dir=${SENSOR_DEB_DIR:-}
+haptics_deb_archive=${HAPTICS_DEB_ARCHIVE:-}
 haptics_deb_dir=${HAPTICS_DEB_DIR:-}
 camera_stack_deb_dir=${CAMERA_STACK_DEB_DIR:-}
 build_tb321fu_gpu_sensor=$BUILD_TB321FU_GPU_SENSOR
 tb321fu_gpu_sensor_source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-repo-default}
 install_gnome_snapshot=$INSTALL_GNOME_SNAPSHOT
 install_firefox=$INSTALL_FIREFOX
+disable_snapd=$DISABLE_SNAPD
 apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
 apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
 INFO

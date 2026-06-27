@@ -30,7 +30,7 @@ ARCH=arm64
 MIRROR=http://ports.ubuntu.com/ubuntu-ports
 ROOTFS_IMAGE_SIZE=14G
 ROOTFS_UUID=
-ROOTFS_LABEL=Y700ROOTFS
+ROOTFS_LABEL=Ubuntu
 ROOTFS_PARTLABEL=userdata
 HOSTNAME_NAME=y700
 DEFAULT_USER_NAME=y700
@@ -38,15 +38,21 @@ DEFAULT_USER_PASSWORD=1234
 ROOT_PASSWORD_MODE=locked
 ROOT_PASSWORD=
 USER_SUDO_MODE=password
+SDDM_AUTOLOGIN=0
+SDDM_AUTOLOGIN_SESSION=plasma
 TZ_REGION=Asia/Shanghai
 LANG_NAME=zh_CN.UTF-8
 PACKAGE_LIST=
 DESKTOP_ENV=plasma-desktop
+INSTALL_FIREFOX=1
+DISABLE_SNAPD=1
 OVERLAY_ARCHIVE=
 DEB_ARCHIVE=
+SENSOR_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-sensor-debs/releases/download/tb321fu-sensor-debs-20260626.1/tb321fu-sensor-debs_20260626.1_arm64.tar.gz
+HAPTICS_DEB_ARCHIVE=https://github.com/GUF296/tb321fu-haptics-debs/releases/download/tb321fu-haptics-debs-20260627.1/tb321fu-haptics-debs_20260627.1_arm64.tar.gz
 CLEAN_APT_CACHE=1
 COMPRESS=7z
-CHUNK_SIZE=1500m
+CHUNK_SIZE=
 KEEP_RAW_IMAGE=0
 ```
 
@@ -67,7 +73,7 @@ ROOTARGS=
 ROOTARGS_EXTRA=
 STABLEARGS=drm_client_lib.active=none
 BOOT_COMPRESS=7z
-BOOT_CHUNK_SIZE=1500m
+BOOT_CHUNK_SIZE=
 KEEP_BOOT_IMAGE=0
 ```
 
@@ -95,3 +101,29 @@ DTB_NAME=sm8650-lenovo-tb321fu.dtb
 ## Policy Boundary
 
 The rootfs builder does not hardcode one historical verified Y700 state. Use `OVERLAY_ARCHIVE`, `DEB_ARCHIVE`, and the source artifact inputs to select the device payload for each build. Separate verification profiles can be added as independent workflow steps without making the rootfs construction script depend on one fixed baseline.
+
+## Release Assets
+
+When `release_tag` is set, the release intentionally uploads only the user-facing boot/rootfs artifacts:
+
+- `${output_prefix}-rootfs.<compression>`
+- `${output_prefix}-grub.<compression>`
+- `SHA256SUMS.txt`
+
+The release notes include the rootfs, boot and source config used for that build. Password-like values are redacted from the notes. Release uploads require single-file archives; leave `CHUNK_SIZE` and `BOOT_CHUNK_SIZE` empty when creating a release.
+
+## External Device Debs
+
+The rootfs workflow can consume prebuilt device deb archives instead of rebuilding every device package inline:
+
+- `SENSOR_DEB_ARCHIVE`: tar/zip archive containing the verified `qcom-sns-*` and `tb321fu-sensors` debs. Current default: `https://github.com/GUF296/tb321fu-sensor-debs/releases/download/tb321fu-sensor-debs-20260626.1/tb321fu-sensor-debs_20260626.1_arm64.tar.gz`.
+- `HAPTICS_DEB_ARCHIVE`: tar/zip archive containing the verified `tb321fu-haptics` deb. Current default: `https://github.com/GUF296/tb321fu-haptics-debs/releases/download/tb321fu-haptics-debs-20260627.1/tb321fu-haptics-debs_20260627.1_arm64.tar.gz`.
+
+When `BUILD_Y700_SENSOR_DEBS=1` or `BUILD_TB321FU_HAPTICS_DEB=1`, the workflow now requires either a prebuilt deb archive/directory or all source inputs needed to build that component. It intentionally fails on missing inputs rather than producing a successful rootfs with missing sensor or haptics support.
+
+Recommended split:
+
+- `tb321fu-sensor-debs`: build from the upstream-derived `libssc`, `iio-sensor-proxy`, and `hexagonrpc` sources plus TB321FU patches/registry data, then release a sensor deb archive.
+- `tb321fu-haptics-debs`: build the AW86937 external module from the matching Linux source/build artifacts plus TB321FU haptics glue, then release a haptics deb archive.
+
+The rootfs workflow references those release assets through `SENSOR_DEB_ARCHIVE` and `HAPTICS_DEB_ARCHIVE` by default.

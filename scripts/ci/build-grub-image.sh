@@ -45,7 +45,7 @@ Environment inputs:
   ROOTARGS_EXTRA             appended to generated rootargs
   STABLEARGS                 default: drm_client_lib.active=none
   BOOT_COMPRESS              none|zstd|xz|7z, default: 7z
-  BOOT_CHUNK_SIZE            optional 7z volume size, default: 1500m
+  BOOT_CHUNK_SIZE            optional 7z volume size; empty disables volumes
   KEEP_BOOT_IMAGE            keep uncompressed boot image after packaging, default: 0
 USAGE
 }
@@ -74,7 +74,7 @@ ROOT_SELECTOR=${ROOT_SELECTOR:-partlabel}
 STABLEARGS=${STABLEARGS:-drm_client_lib.active=none}
 QCOMRAMP_CFG_NAME=${QCOMRAMP_CFG_NAME:-qcomramp.cfg}
 BOOT_COMPRESS=${BOOT_COMPRESS:-7z}
-BOOT_CHUNK_SIZE=${BOOT_CHUNK_SIZE:-1500m}
+BOOT_CHUNK_SIZE=${BOOT_CHUNK_SIZE:-}
 KEEP_BOOT_IMAGE=${KEEP_BOOT_IMAGE:-0}
 
 mkdir -p "$OUTPUT_DIR"
