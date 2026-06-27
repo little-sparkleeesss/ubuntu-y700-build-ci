@@ -10,19 +10,21 @@ Primary workflow:
 
 - `.github/workflows/build-rootfs-and-grub.yml`
 
-It has only four dispatch inputs:
+The workflow exposes common dispatch inputs directly in the GitHub Actions UI, including output prefix, Ubuntu mirror, image sizes, rootfs labels, default user settings, sudo mode, and optional SDDM autologin.
+
+It also keeps three optional advanced override inputs:
 
 - `release_tag`: optional release tag to upload artifacts to.
 - `output_prefix`: output filename prefix.
-- `rootfs_config`: rootfs settings as `KEY=value` lines.
-- `boot_config`: GRUB/FAT boot settings as `KEY=value` lines.
-- `source_config`: input artifact URLs as `KEY=value` lines.
+- `rootfs_config`: optional rootfs overrides as `KEY=value` lines.
+- `boot_config`: optional GRUB/FAT boot overrides as `KEY=value` lines.
+- `source_config`: optional input artifact URL overrides as `KEY=value` lines.
 
-This avoids GitHub's workflow input count limit while still allowing all build-time parameters to be changed from the Actions UI or `gh workflow run`.
+Leave the advanced override inputs empty for the built-in verified defaults. If an advanced override input is filled, its `KEY=value` lines are appended after the built-in defaults and before the common UI fields are applied.
 
 ## Rootfs Config
 
-Example:
+Optional override example:
 
 ```text
 DISTRO=noble
@@ -58,7 +60,7 @@ KEEP_RAW_IMAGE=0
 
 ## Boot Config
 
-Example:
+Optional override example:
 
 ```text
 BOOT_IMAGE_SIZE=14G
@@ -79,7 +81,7 @@ KEEP_BOOT_IMAGE=0
 
 ## Source Config
 
-Example:
+Optional override example:
 
 ```text
 KERNEL_ARTIFACT_ARCHIVE=https://github.com/GUF296/ubuntu-y700-build-ci/releases/download/bootstrap-y700-20260625/y700-kernel-artifacts-7.1.1-g5df8e852ea72.tar.gz
