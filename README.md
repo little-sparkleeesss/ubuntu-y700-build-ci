@@ -47,6 +47,7 @@ LANG_NAME=zh_CN.UTF-8
 PACKAGE_LIST=
 DESKTOP_ENV=plasma-desktop
 INSTALL_FIREFOX=1
+INSTALL_FCITX5_CHINESE=1
 DISABLE_SNAPD=1
 OVERLAY_ARCHIVE=
 DEB_ARCHIVE=
@@ -113,6 +114,18 @@ When `release_tag` is set, the release intentionally uploads only the user-facin
 - `SHA256SUMS.txt`
 
 The release notes include the rootfs, boot and source config used for that build. Password-like values are redacted from the notes. Release uploads require single-file archives; leave `CHUNK_SIZE` and `BOOT_CHUNK_SIZE` empty when creating a release.
+
+New releases created by the workflow are normal GitHub Releases, not prereleases.
+
+## Chinese Input
+
+The default rootfs includes Fcitx 5 Chinese input support:
+
+- `fcitx5`, `fcitx5-chinese-addons`, `fcitx5-pinyin`, Qt/GTK/KDE frontends, and Noto CJK fonts.
+- System and user-session input method environment variables are preconfigured for Fcitx.
+- `/etc/skel` and the default user home are seeded with Fcitx autostart and a default profile containing US keyboard plus Pinyin.
+
+Set `INSTALL_FCITX5_CHINESE=0` in `rootfs_config` to opt out.
 
 ## External Device Debs
 

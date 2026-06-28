@@ -54,6 +54,8 @@ Environment inputs:
                               optional source directory for the plugin; defaults to repo source/
   INSTALL_GNOME_SNAPSHOT     install GNOME Snapshot camera app, default: 1
   INSTALL_FIREFOX            install Firefox browser, default: 1
+  INSTALL_FCITX5_CHINESE     install and configure Fcitx 5 Chinese input, default: 1
+  FCITX5_CHINESE_PACKAGES    optional package list for Fcitx 5 Chinese input
   DISABLE_SNAPD              purge snapd and snap integration from rootfs, default: 1
   APPLY_Y700_FIRMWARE_FIXES  copy/verify required Y700 firmware paths only, default: 1
   APPLY_Y700_AUDIO_POLICY_FIXES
@@ -109,6 +111,8 @@ BUILD_TB321FU_GPU_SENSOR=${BUILD_TB321FU_GPU_SENSOR:-1}
 TB321FU_GPU_SENSOR_SOURCE_DIR=${TB321FU_GPU_SENSOR_SOURCE_DIR:-}
 INSTALL_GNOME_SNAPSHOT=${INSTALL_GNOME_SNAPSHOT:-1}
 INSTALL_FIREFOX=${INSTALL_FIREFOX:-1}
+INSTALL_FCITX5_CHINESE=${INSTALL_FCITX5_CHINESE:-1}
+FCITX5_CHINESE_PACKAGES=${FCITX5_CHINESE_PACKAGES:-"fonts-noto-cjk im-config fcitx5 fcitx5-chinese-addons fcitx5-pinyin fcitx5-config-qt kde-config-fcitx5 fcitx5-frontend-gtk2 fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-frontend-qt5 fcitx5-frontend-qt6 fcitx5-module-wayland fcitx5-module-xorg fcitx5-module-kimpanel fcitx5-module-emoji fcitx5-material-color"}
 DISABLE_SNAPD=${DISABLE_SNAPD:-1}
 COMPRESS=${COMPRESS:-7z}
 CHUNK_SIZE=${CHUNK_SIZE:-}
@@ -124,6 +128,9 @@ if ci_bool "$INSTALL_GNOME_SNAPSHOT"; then
 fi
 if ci_bool "$INSTALL_FIREFOX"; then
   PACKAGE_LIST="$PACKAGE_LIST firefox"
+fi
+if ci_bool "$INSTALL_FCITX5_CHINESE"; then
+  PACKAGE_LIST="$PACKAGE_LIST $FCITX5_CHINESE_PACKAGES"
 fi
 
 configure_mozilla_firefox_repo() {
@@ -609,6 +616,83 @@ if ci_bool_chroot "$INSTALL_FIREFOX"; then
   esac
 fi
 
+if ci_bool_chroot "$INSTALL_FCITX5_CHINESE"; then
+  for pkg in fcitx5 fcitx5-chinese-addons fcitx5-pinyin im-config fonts-noto-cjk; do
+    dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || {
+      echo "required Fcitx 5 Chinese input package missing: $pkg" >&2
+      exit 1
+    }
+  done
+
+  install -d -m 0755 \
+    /etc/environment.d \
+    /etc/skel/.config/environment.d \
+    /etc/skel/.config/autostart \
+    /etc/skel/.config/fcitx5 \
+    /etc/skel/.config/plasma-workspace/env
+
+  cat > /etc/environment.d/90-fcitx5.conf <<'FCITX5_ENV'
+GTK_IM_MODULE=fcitx
+QT_IM_MODULE=fcitx
+XMODIFIERS=@im=fcitx
+SDL_IM_MODULE=fcitx
+INPUT_METHOD=fcitx
+FCITX5_ENV
+  chmod 0644 /etc/environment.d/90-fcitx5.conf
+  cp -a /etc/environment.d/90-fcitx5.conf /etc/skel/.config/environment.d/90-fcitx5.conf
+
+  cat > /etc/skel/.config/plasma-workspace/env/fcitx5.sh <<'FCITX5_PLASMA_ENV'
+#!/bin/sh
+export GTK_IM_MODULE=fcitx
+export QT_IM_MODULE=fcitx
+export XMODIFIERS=@im=fcitx
+export SDL_IM_MODULE=fcitx
+export INPUT_METHOD=fcitx
+FCITX5_PLASMA_ENV
+  chmod 0755 /etc/skel/.config/plasma-workspace/env/fcitx5.sh
+
+  cat > /etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop <<'FCITX5_AUTOSTART'
+[Desktop Entry]
+Name=Fcitx 5
+GenericName=Input Method
+Comment=Start Fcitx 5 input method
+Exec=fcitx5 -d --replace
+Icon=org.fcitx.Fcitx5
+Terminal=false
+Type=Application
+Categories=System;Utility;
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel
+FCITX5_AUTOSTART
+  chmod 0644 /etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop
+
+  cat > /etc/skel/.config/fcitx5/profile <<'FCITX5_PROFILE'
+[Groups/0]
+# Group Name
+Name=Default
+# Layout
+Default Layout=us
+# Default Input Method
+DefaultIM=pinyin
+
+[Groups/0/Items/0]
+# Name
+Name=keyboard-us
+# Layout
+Layout=
+
+[Groups/0/Items/1]
+# Name
+Name=pinyin
+# Layout
+Layout=
+
+[GroupOrder]
+0=Default
+FCITX5_PROFILE
+  chmod 0644 /etc/skel/.config/fcitx5/profile
+fi
+
 install -d -m 0755 /etc/skel/.config
 cat > /etc/skel/.config/plasmakeyboardrc <<'PLASMAKEYBOARDRC'
 [General]
@@ -674,6 +758,26 @@ if ! id -u "$DEFAULT_USER_NAME" >/dev/null 2>&1; then
   useradd -m -s /bin/bash "$DEFAULT_USER_NAME"
 fi
 printf '%s:%s\n' "$DEFAULT_USER_NAME" "$DEFAULT_USER_PASSWORD" | chpasswd
+
+if ci_bool_chroot "$INSTALL_FCITX5_CHINESE" && [ -d "/home/$DEFAULT_USER_NAME" ]; then
+  default_user_group=$(id -gn "$DEFAULT_USER_NAME")
+  install -d -m 0755 \
+    "/home/$DEFAULT_USER_NAME/.config" \
+    "/home/$DEFAULT_USER_NAME/.config/environment.d" \
+    "/home/$DEFAULT_USER_NAME/.config/autostart" \
+    "/home/$DEFAULT_USER_NAME/.config/fcitx5" \
+    "/home/$DEFAULT_USER_NAME/.config/plasma-workspace" \
+    "/home/$DEFAULT_USER_NAME/.config/plasma-workspace/env"
+  cp -a /etc/skel/.config/environment.d/90-fcitx5.conf "/home/$DEFAULT_USER_NAME/.config/environment.d/90-fcitx5.conf"
+  cp -a /etc/skel/.config/autostart/org.fcitx.Fcitx5.desktop "/home/$DEFAULT_USER_NAME/.config/autostart/org.fcitx.Fcitx5.desktop"
+  cp -a /etc/skel/.config/fcitx5/profile "/home/$DEFAULT_USER_NAME/.config/fcitx5/profile"
+  cp -a /etc/skel/.config/plasma-workspace/env/fcitx5.sh "/home/$DEFAULT_USER_NAME/.config/plasma-workspace/env/fcitx5.sh"
+  chown -R "$DEFAULT_USER_NAME:$default_user_group" \
+    "/home/$DEFAULT_USER_NAME/.config/environment.d" \
+    "/home/$DEFAULT_USER_NAME/.config/autostart" \
+    "/home/$DEFAULT_USER_NAME/.config/fcitx5" \
+    "/home/$DEFAULT_USER_NAME/.config/plasma-workspace"
+fi
 
 case "$ROOT_PASSWORD_MODE" in
   locked)
@@ -807,6 +911,7 @@ chroot "$rootfs_dir" env -i \
   HOME=/root \
   LANG=C.UTF-8 \
   PACKAGE_LIST="$PACKAGE_LIST" \
+  INSTALL_FCITX5_CHINESE="$INSTALL_FCITX5_CHINESE" \
   DEFAULT_USER_NAME="$DEFAULT_USER_NAME" \
   DEFAULT_USER_PASSWORD="$DEFAULT_USER_PASSWORD" \
   ROOT_PASSWORD_MODE="$ROOT_PASSWORD_MODE" \
@@ -887,6 +992,7 @@ build_tb321fu_gpu_sensor=$BUILD_TB321FU_GPU_SENSOR
 tb321fu_gpu_sensor_source_dir=${TB321FU_GPU_SENSOR_SOURCE_DIR:-repo-default}
 install_gnome_snapshot=$INSTALL_GNOME_SNAPSHOT
 install_firefox=$INSTALL_FIREFOX
+install_fcitx5_chinese=$INSTALL_FCITX5_CHINESE
 disable_snapd=$DISABLE_SNAPD
 apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
 apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
