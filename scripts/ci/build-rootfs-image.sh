@@ -191,6 +191,7 @@ mkdir -p "$OUTPUT_DIR"
 work_dir=$(mktemp -d "$OUTPUT_DIR/.rootfs-build.XXXXXX")
 rootfs_dir="$work_dir/rootfs"
 rootfs_img="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.img"
+build_info="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.BUILD-INFO.txt"
 manifest="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.manifest"
 mounted=0
 
@@ -980,7 +981,7 @@ if ci_bool "$BUILD_TB321FU_GPU_SENSOR"; then
   apply_tb321fu_gpu_sensor "$rootfs_dir"
 fi
 
-cat > "$rootfs_dir/BUILD-INFO.txt" <<INFO
+cat > "$build_info" <<INFO
 generated=$(date -u -Iseconds)
 distro=$DISTRO
 arch=$ARCH
@@ -1014,6 +1015,12 @@ apply_y700_firmware_fixes=$APPLY_Y700_FIRMWARE_FIXES
 apply_y700_audio_policy_fixes=$APPLY_Y700_AUDIO_POLICY_FIXES
 INFO
 
+rm -f \
+  "$rootfs_dir/BUILD-INFO.txt" \
+  "$rootfs_dir/SHA256SUMS" \
+  "$rootfs_dir/SHA256SUMS.txt" \
+  "$rootfs_dir/Y700-ROOTFS-OVERLAY-MANIFEST.tsv"
+
 ci_log "writing manifest"
 (cd "$rootfs_dir" && find . -xdev -printf '%y\t%u\t%g\t%m\t%s\t%p\n' | sort) > "$manifest"
 
@@ -1030,7 +1037,7 @@ raw_sha_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.raw.sha256"
 
 checksum_file="$OUTPUT_DIR/${OUTPUT_PREFIX}-rootfs.SHA256SUMS"
 rm -f "$checksum_file"
-(cd "$OUTPUT_DIR" && sha256sum "$(basename "$manifest")" "$(basename "$raw_sha_file")" > "$(basename "$checksum_file")")
+(cd "$OUTPUT_DIR" && sha256sum "$(basename "$build_info")" "$(basename "$manifest")" "$(basename "$raw_sha_file")" > "$(basename "$checksum_file")")
 
 case "$COMPRESS" in
   none)
